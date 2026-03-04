@@ -36,6 +36,13 @@ h2 {
   margin: 10px 0;
   padding: 10px 15px;
   border-radius: 10px;
+  min-height: 60px;
+  box-sizing: border-box;
+  overflow: hidden;
+}
+
+.area-inner {
+  display: block;
 }
 
 #areaA {
@@ -60,6 +67,12 @@ h2 {
   display: inline-grid;
   grid-template-columns: repeat(3, 70px);
   grid-gap: 8px;
+}
+
+#keypad .keypad-empty {
+  width: 70px;
+  height: 70px;
+  pointer-events: none;
 }
 
 #keypad button {
@@ -100,94 +113,187 @@ h2 {
   color: #111827;
 }
 
+#pauseBtn.is-paused {
+  background: #f59e0b !important;
+  color: #111827 !important;
+}
+
 #result {
   margin-top: 12px;
   min-height: 24px;
   font-size: 18px;
+}
+
+/* 结束磨砂覆盖层 */
+#endOverlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(255, 255, 255, 0.6);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  z-index: 100;
+  align-items: center;
+  justify-content: center;
+}
+
+#endOverlay.show {
+  display: flex;
+}
+
+.end-overlay-content {
+  background: #fff;
+  border-radius: 20px;
+  padding: 32px 40px;
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.15);
+  text-align: center;
+}
+
+.end-result-row {
+  display: flex;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 20px;
+  font-size: 28px;
+  max-width: 520px;
+}
+
+.end-rate {
+  font-size: 48px;
+  font-weight: 700;
+  color: #4f46e5;
+  margin-bottom: 24px;
+}
+
+.end-overlay-content button {
+  padding: 12px 28px;
+  border-radius: 24px;
+  border: none;
+  background: #4f46e5;
+  color: #fff;
+  font-size: 16px;
+  cursor: pointer;
 }
 </style>
 </head>
 
 <body>
 
-<h2>一溯答</h2>
+<h2 id="levelTitle">一溯答</h2>
 
 <div class="game-container">
   <div class="areas">
-    <div id="areaA"></div>
-    <div id="areaB"></div>
+    <div id="areaA"><span class="area-inner"></span></div>
+    <div id="areaB"><span class="area-inner"></span></div>
     <div id="answerDisplay"></div>
   </div>
 
   <div id="keypad"></div>
 
   <div id="control">
-    <button onclick="startGame()">开始游戏</button>
-    <button onclick="pauseGame()">暂停</button>
-    <button onclick="giveUp()">放弃</button>
+    <button id="startBtn" onclick="startGame()">开始游戏</button>
+    <button id="pauseBtn" onclick="pauseGame()">暂停</button>
+    <button id="endBtn" onclick="giveUp()">结束游戏</button>
   </div>
 
   <div id="result"></div>
 </div>
 
-<script>
-// 溯答：看当前题，答上一题（5 题十以内加减法，5 秒一题）
+<div id="endOverlay">
+  <div class="end-overlay-content">
+    <div id="endResultRow" class="end-result-row"></div>
+    <div id="endRate" class="end-rate"></div>
+    <button id="overlayStartBtn" type="button" onclick="closeOverlayAndStart()">开始游戏</button>
+  </div>
+</div>
 
+<script>
+// 溯答：看第 N 题，答第 N-L 题（每次仅答一题），5 秒一轮
+// 题量：一溯答 20 题；每升一级 +2 题（22/24/26）
+
+const LEVEL_NAMES = ["", "一溯答", "二溯答", "三溯答", "四溯答"];
 let questions = [];
-let currentIndex = 0; // 当前显示的是第几题（0-5），从第 2 题开始才真正作答，第 6 轮补答第 5 题
+let currentIndex = 0;
 let correctCount = 0;
 let timer = null;
-const TIME_LIMIT = 5000; // 5 秒
+const TIME_LIMIT = 5000;
 let gameRunning = false;
 let paused = false;
-const TOTAL_QUESTIONS = 5;
-const ANSWERABLE_QUESTIONS = TOTAL_QUESTIONS; // 5 题都要被答到
+let totalQuestions = 20;
+let currentLevel = 1; // 1~4：一/二/三/四溯答（L=1/2/3/4）
+let lastGameRate = null; // 结算后若 >=85 则可进入下一关
+let questionResults = []; // 每题对错，用于结算展示 ✅/❌
+let hasAttemptThisStep = false;
 
-// 生成 5 道十以内加减法题（加数、减数、被减数、结果都在 0-10）
+function computeTotalQuestions() {
+  return 20 + (currentLevel - 1) * 2;
+}
+
+function updateActionButtons() {
+  const label =
+    lastGameRate === null
+      ? "开始游戏"
+      : (lastGameRate >= 85 ? "下一关" : "再来一次");
+  const startBtn = document.getElementById("startBtn");
+  const overlayStartBtn = document.getElementById("overlayStartBtn");
+  if (startBtn) startBtn.innerText = label;
+  if (overlayStartBtn) overlayStartBtn.innerText = label;
+}
+
+// 生成题目（所有数字 0-9）
 function generateQuestions() {
   questions = [];
-  for (let i = 0; i < TOTAL_QUESTIONS; i++) {
+  for (let i = 0; i < totalQuestions; i++) {
     const isAdd = Math.random() < 0.5;
     let a, b, ans, op;
-
     if (isAdd) {
       op = "+";
-      // a + b <= 9，且 a、b、结果都在 0-9（不出现两位数）
-      a = Math.floor(Math.random() * 10); // 0-9
-      b = Math.floor(Math.random() * (10 - a)); // 0-(9-a)
+      a = Math.floor(Math.random() * 10);
+      b = Math.floor(Math.random() * (10 - a));
       ans = a + b;
     } else {
       op = "-";
-      // a - b >= 0，且 a、b、结果都在 0-9（不出现两位数）
-      a = Math.floor(Math.random() * 10); // 被减数 0-9
-      b = Math.floor(Math.random() * (a + 1)); // 减数 0-a
+      a = Math.floor(Math.random() * 10);
+      b = Math.floor(Math.random() * (a + 1));
       ans = a - b;
     }
-
-    questions.push({
-      a,
-      b,
-      op,
-      text: a + " " + op + " " + b,
-      answer: ans
-    });
+    questions.push({ a, b, op, text: a + " " + op + " " + b, answer: ans });
   }
 }
 
+function setAreaContent(areaId, html) {
+  const area = document.getElementById(areaId);
+  const inner = area ? area.querySelector(".area-inner") : null;
+  if (inner) inner.innerHTML = html;
+}
+
 function startGame() {
+  document.getElementById("endOverlay").classList.remove("show");
+  if (lastGameRate !== null && lastGameRate >= 85) currentLevel = Math.min(currentLevel + 1, 4);
+
+  totalQuestions = computeTotalQuestions();
+  updateActionButtons();
+
+  document.getElementById("levelTitle").innerText = LEVEL_NAMES[currentLevel];
+  questionResults = new Array(totalQuestions).fill(null);
   generateQuestions();
   currentIndex = 0;
   correctCount = 0;
+  hasAttemptThisStep = false;
   gameRunning = true;
   paused = false;
   document.getElementById("result").innerText = "";
   document.getElementById("answerDisplay").innerText = "";
+  document.getElementById("pauseBtn").classList.remove("is-paused");
   showQuestion();
 }
 
 function pauseGame() {
   if (!gameRunning) return;
   paused = !paused;
+  const btn = document.getElementById("pauseBtn");
+  if (btn) btn.classList.toggle("is-paused", paused);
   if (paused) {
     clearTimeout(timer);
   } else {
@@ -200,167 +306,103 @@ function giveUp() {
   endGame();
 }
 
-function restartGame() {
-  clearTimeout(timer);
-  startGame();
-}
-
-// 辅助：根据 currentIndex 计算「要回答的是哪一题」
+// 当前这一步要回答哪一题：看第 N 题，答第 N-L 题（每次只答一题）
 function getTargetInfo() {
-  // currentIndex 为 0 时没有可回答的题
-  if (currentIndex === 0) {
-    return null;
-  }
-  // currentIndex 1~4：回答第 1~4 题
-  if (currentIndex >= 1 && currentIndex <= TOTAL_QUESTIONS - 1) {
-    return {
-      targetIndex: currentIndex - 1,
-      labelNumber: currentIndex // 第 N 题
-    };
-  }
-  // currentIndex === 5：补答第 5 题
-  if (currentIndex === TOTAL_QUESTIONS) {
-    return {
-      targetIndex: TOTAL_QUESTIONS - 1,
-      labelNumber: TOTAL_QUESTIONS
-    };
-  }
-  return null;
+  const L = currentLevel;
+  const targetIndex = currentIndex - L;
+  if (targetIndex < 0 || targetIndex >= totalQuestions) return null;
+  return { targetIndex, labelNumber: targetIndex + 1 };
 }
 
-// 渲染 B 区为「问号」形式
 function renderMaskedB() {
-  const areaB = document.getElementById("areaB");
   const info = getTargetInfo();
-  if (!info) {
-    areaB.innerText = "请记住本题，下一题开始作答上一题。";
-    return;
-  }
-  const prev = questions[info.targetIndex];
-  areaB.innerText =
-    "第 " + info.labelNumber + " 题： ? " + prev.op + " ? = ?";
+  if (!info) return "请记住本题。";
+  const q = questions[info.targetIndex];
+  return "第 " + info.labelNumber + " 题： ? " + q.op + " ? = ?";
 }
 
-// 渲染 B 区显示玩家本次尝试的答案
 function renderCandidateB(ans) {
-  const areaB = document.getElementById("areaB");
   const info = getTargetInfo();
-  if (!info) return;
-  const prev = questions[info.targetIndex];
-  areaB.innerText =
-    "第 " + info.labelNumber + " 题： ? " + prev.op + " ? = " + ans;
+  if (!info) return "";
+  const q = questions[info.targetIndex];
+  return "第 " + info.labelNumber + " 题： ? " + q.op + " ? = " + ans;
 }
 
-// 渲染 B 区为完整算式
 function renderRevealedB() {
-  const areaB = document.getElementById("areaB");
   const info = getTargetInfo();
-  if (!info) return;
-  const prev = questions[info.targetIndex];
-  areaB.innerText =
-    "第 " +
-    info.labelNumber +
-    " 题： " +
-    prev.a +
-    " " +
-    prev.op +
-    " " +
-    prev.b +
-    " = " +
-    prev.answer;
+  if (!info) return "";
+  const q = questions[info.targetIndex];
+  return "第 " + info.labelNumber + " 题： " + q.a + " " + q.op + " " + q.b + " = " + q.answer;
 }
 
-// 显示当前题目与上一题（问号形式），并开始计时
 function showQuestion() {
   if (!gameRunning) return;
-
-  // 共 6 轮：0~4 显示题目，5 补答第 5 题
-  if (currentIndex > TOTAL_QUESTIONS) {
+  // 总轮数 = 题目数 + L（末尾补答剩余题）
+  if (currentIndex >= totalQuestions + currentLevel) {
     endGame();
     return;
   }
 
-  const areaA = document.getElementById("areaA");
-  const areaB = document.getElementById("areaB");
-
-  if (currentIndex === 0) {
-    // 第 1 轮：展示第 1 题，只记忆不作答
-    const q0 = questions[0];
-    areaA.innerText = "第 1 题： " + q0.text + " = ?";
-    renderMaskedB();
-  } else if (currentIndex >= 1 && currentIndex <= TOTAL_QUESTIONS - 1) {
-    // 第 2~5 轮：显示当前题目，回答上一题
-    const q = questions[currentIndex];
-    areaA.innerText =
-      "第 " + (currentIndex + 1) + " 题： " + q.text + " = ?";
-    renderMaskedB();
-  } else if (currentIndex === TOTAL_QUESTIONS) {
-    // 第 6 轮：补答第 5 题
-    areaA.innerText = "补答最后一题：请回答第 5 题的结果";
-    renderMaskedB();
-  }
-
+  hasAttemptThisStep = false;
   document.getElementById("answerDisplay").innerText = "";
+
+  if (currentIndex < totalQuestions) {
+    const q = questions[currentIndex];
+    setAreaContent("areaA", "第 " + (currentIndex + 1) + " 题： " + q.text + " = ?");
+  } else {
+    setAreaContent("areaA", "补答阶段：继续回答之前的题目");
+  }
+  setAreaContent("areaB", renderMaskedB());
 
   startTimer();
 }
 
 function startTimer() {
   clearTimeout(timer);
-  timer = setTimeout(() => {
-    // 超时：如果还没有上一题（currentIndex === 0），直接进入下一轮；
-    // 否则视为该题未答对，直接进入下一轮
+  timer = setTimeout(function () {
     if (!gameRunning) return;
-    if (currentIndex === 0) {
+    const info = getTargetInfo();
+    if (!info) {
       gotoNextStep();
-    } else {
-      const info = getTargetInfo();
-      if (info) {
-        const correctAnswer = questions[info.targetIndex].answer;
-        const resultDiv = document.getElementById("result");
-        resultDiv.innerText =
-          "❌ 超时，正确答案是 " + correctAnswer;
-      }
-      setTimeout(() => {
-        document.getElementById("result").innerText = "";
-        gotoNextStep();
-      }, 500);
+      return;
     }
+    if (questionResults[info.targetIndex] === null) questionResults[info.targetIndex] = false;
+    document.getElementById("result").innerText = "❌ 超时";
+    setTimeout(function () {
+      document.getElementById("result").innerText = "";
+      gotoNextStep();
+    }, 500);
   }, TIME_LIMIT);
 }
 
 function inputNumber(num) {
   if (!gameRunning || paused) return;
-  // 只允许在有可回答题目时作答
   const info = getTargetInfo();
   if (!info) return;
 
-  const userAns = num; // 所有计算结果都是 0-9 的一位数
+  // 如果该题已经被记录过结果（超时/已判对），本轮不再作答
+  if (questionResults[info.targetIndex] === true || questionResults[info.targetIndex] === false) return;
+
+  hasAttemptThisStep = true;
+  setAreaContent("areaB", renderCandidateB(num));
+  document.getElementById("answerDisplay").innerText = "正在回答第 " + info.labelNumber + " 题";
+
   const correctAnswer = questions[info.targetIndex].answer;
-
-  // 显示本次尝试
-  renderCandidateB(userAns);
-  document.getElementById("answerDisplay").innerText =
-    "本轮作答第 " + info.labelNumber + " 题";
-
-  if (userAns === correctAnswer) {
-    correctCount++;
-    renderRevealedB();
-    const resultDiv = document.getElementById("result");
-    resultDiv.innerText =
-      "✅ 第 " + info.labelNumber + " 题回答正确！";
+  if (num === correctAnswer) {
+    questionResults[info.targetIndex] = true;
+    correctCount += 1;
+    setAreaContent("areaB", renderRevealedB());
+    document.getElementById("result").innerText = "✅ 正确！";
     clearTimeout(timer);
-    setTimeout(() => {
-      resultDiv.innerText = "";
+    setTimeout(function () {
+      document.getElementById("result").innerText = "";
       gotoNextStep();
     }, 600);
   } else {
-    const resultDiv = document.getElementById("result");
-    resultDiv.innerText =
-      "❌ 第 " + info.labelNumber + " 题回答错误";
-    setTimeout(() => {
-      renderMaskedB();
-      resultDiv.innerText = "";
+    document.getElementById("result").innerText = "❌";
+    setTimeout(function () {
+      setAreaContent("areaB", renderMaskedB());
+      document.getElementById("result").innerText = "";
     }, 300);
   }
 }
@@ -373,60 +415,50 @@ function gotoNextStep() {
 function endGame() {
   gameRunning = false;
   clearTimeout(timer);
-
-  // 实际可作答题目为 TOTAL_QUESTIONS - 1（从第 2 题开始答上一题）
-  const rate = (correctCount / ANSWERABLE_QUESTIONS) * 100;
-  let level = "";
-
-  if (rate === 100) {
-    level = "S 级记忆大师";
-  } else if (rate >= 80) {
-    level = "A 级高手";
-  } else if (rate >= 60) {
-    level = "B 级进阶者";
-  } else if (rate >= 40) {
-    level = "C 级入门者";
-  } else {
-    level = "D 级需多练习";
+  for (var i = 0; i < questionResults.length; i++) {
+    if (questionResults[i] === null) questionResults[i] = false;
   }
+  var rate = (correctCount / totalQuestions) * 100;
+  lastGameRate = rate;
+  updateActionButtons();
 
-  document.getElementById("areaA").innerText = "游戏结束";
-  document.getElementById("areaB").innerText = "";
-  document.getElementById("answerDisplay").innerText = "";
-  document.getElementById("result").innerText =
-    "正确题数：" +
-    correctCount +
-    "/" +
-    ANSWERABLE_QUESTIONS +
-    "，正确率：" +
-    rate.toFixed(0) +
-    "%，等级：" +
-    level;
+  var row = document.getElementById("endResultRow");
+  row.innerHTML = questionResults.map(function (r) {
+    return r ? "✅" : "❌";
+  }).join("");
+
+  document.getElementById("endRate").innerText = rate.toFixed(0) + "%";
+  document.getElementById("endOverlay").classList.add("show");
+}
+
+function closeOverlayAndStart() {
+  document.getElementById("endOverlay").classList.remove("show");
+  startGame();
 }
 
 function createKeypad() {
-  const keypad = document.getElementById("keypad");
+  var keypad = document.getElementById("keypad");
   keypad.innerHTML = "";
-
-  for (let i = 1; i <= 9; i++) {
-    const btn = document.createElement("button");
+  for (var i = 1; i <= 9; i++) {
+    var btn = document.createElement("button");
     btn.innerText = i;
-    btn.onclick = () => inputNumber(i);
+    btn.onclick = (function (n) { return function () { inputNumber(n); }; })(i);
     keypad.appendChild(btn);
   }
-
-  const zero = document.createElement("button");
-  zero.innerText = 0;
-  zero.onclick = () => inputNumber(0);
+  var empty1 = document.createElement("span");
+  empty1.className = "keypad-empty";
+  keypad.appendChild(empty1);
+  var zero = document.createElement("button");
+  zero.innerText = "0";
+  zero.onclick = function () { inputNumber(0); };
   keypad.appendChild(zero);
-
-  const equal = document.createElement("button");
-  equal.innerText = "=";
-  equal.onclick = submitAnswer;
-  keypad.appendChild(equal);
+  var empty2 = document.createElement("span");
+  empty2.className = "keypad-empty";
+  keypad.appendChild(empty2);
 }
 
 createKeypad();
+updateActionButtons();
 </script>
 
 </body>
